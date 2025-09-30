@@ -8,81 +8,65 @@
 #define BLOCK_ID_MIN 0
 #define BLOCK_ID_MAX ((PAGE_SIZE / BLOCK_SIZE) - 1)
 
+#define LOG2_L2C_INDEX 10
+
 #define RR_TABLE_ENTRIES 256 // DO NOT FORGET TO UPDATE LOG2 MACRO!
 #define LOG2_RR_TABLE 8
 #define ROUNDMAX 100
 #define SCOREMAX 31
+#define BADSCORE 1
 
-uint64_t RR_TABLE[RR_TABLE_ENTRIES];
-uint64_t best_offset;
+typedef struct RR_ENTRY {uint64_t tag; uint8_t valid; } RR_ENTRY;
+
+RR_ENTRY RR_TABLE[RR_TABLE_ENTRIES];
+uint64_t best_offset = 0;
 uint64_t offset_table[26] = {1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24, 25, 27, 30, 32, 36, 40, 45, 48, 50, 54, 60}; // 26 entries < 64. Taken from paper. Numbers whose prime factorization does not contain primes greater than 5.
 uint64_t offset_scores[26];
 
 uint64_t round_counter = 0;
 
-// this mask will be used to calculate index
-uint64_t get_mask() {
-  uint64_t ret = 0;
-  for (int i = 0; i < LOG2_RR_TABLE; i++)
-    ret = (ret | 1) << 1;
-  return ret;
+uint64_t get_index(uint64_t addr) {
+  uint64_t line_addr = addr >> LOG2_BLOCK_SIZE;
+  uint64_t mask = (1LU << LOG2_RR_TABLE) - 1;
+  uint64_t low = line_addr & mask;
+  uint64_t next = (line_addr >> LOG2_RR_TABLE) & mask;
+  return low ^ next;
 }
 
-uint64_t get_index(uint64_t block_id) {
-  uint64_t mask = get_mask();
-  uint64_t low = block_id & mask;
-  uint64_t next_low = (block_id >> LOG2_RR_TABLE) & mask;
-  uint64_t index = low ^ next_low; 
-  return index;
+uint64_t get_tag(uint64_t addr) {
+  return ((1LU << 19) - 1) & (addr >> (LOG2_BLOCK_SIZE + LOG2_L2C_INDEX));
 }
-
-// insert prefetched entry in RR table
 void insert_entry(uint64_t addr) {
   uint64_t page_id = EXTRACT_PAGE_ID(addr);
-  uint64_t block_id = EXTRACT_BLOCK_ID(addr);
-  uint64_t index = get_index(block_id);
+  uint64_t index = get_index(addr);
 
   assert(index < RR_TABLE_ENTRIES);
-  cout << "DEBUG: " << index << endl;
 
   // prepare entry (use MSB as valid bit)
-  RR_TABLE[index] = (page_id | ((uint64_t) 1 << 63));
-}
-
-bool is_valid_entry(uint64_t page_number) {
-  // check the MSB
-  uint64_t bit = (page_number >> 63) & 1;
-  return bit == 1 ? true : false;
+  // get the tag bits
+  uint64_t tag = get_tag(addr); // 19 bits tag, 10 bits set index, 6 bits offset
+  assert(tag <= pow(2, 19));
+  printf("TAG: %d\n", tag);
+  RR_TABLE[index] = RR_ENTRY {tag, 1};
 }
 
 // check if entry exist in a table by indexing and matching tag. CHECK FOR VALID BIT ALSO
 bool has_entry(uint64_t addr) {
-  uint64_t index = get_index(EXTRACT_BLOCK_ID(addr));
+  uint64_t index = get_index(addr);
 
-  //TODO: Careful about that valid bit
-  if (!is_valid_entry(RR_TABLE[index]))
+  if (RR_TABLE[index].valid != 1)
     return false;
 
-  // in temp variable we store just a page number
-  uint64_t temp_page_number = ((~(uint64_t) 1 << 63)) & RR_TABLE[index];
-
-  return temp_page_number == EXTRACT_PAGE_ID(addr) ? true : false;
+  return RR_TABLE[index].tag == get_tag(addr) ? true : false;
 }
 
 void run_round(uint64_t addr) {
   round_counter++;
   for (int i = 0; i < 26; i++) {
-    // if X - di is in RR table then increment the score of di
-    // TODO: What if X - di is in different page
-    if (has_entry(addr - offset_table[i]))
+    // check if entry exist and X - di is in same page
+    if (has_entry(addr - offset_table[i]) && EXTRACT_PAGE_ID(addr) == EXTRACT_PAGE_ID(addr - offset_table[i]))
       offset_scores[i]++;
   }
-}
-
-void CACHE::l2c_prefetcher_initialize()
-{
-  cout << "CPU " << cpu << " Region based L2 offset prefetcher" << endl;
-  best_offset = 1;
 }
 
 uint64_t get_max_score() {
@@ -110,7 +94,13 @@ void reset_phase() {
 
   // make every entry invalid in the table
   for (int i = 0; i < RR_TABLE_ENTRIES; i++)
-    RR_TABLE[i] = ((~(uint64_t) 1 << 63)) & RR_TABLE[i];
+    RR_TABLE[i].valid = 0; 
+}
+
+void CACHE::l2c_prefetcher_initialize()
+{
+  cout << "CPU " << cpu << " Region based L2 offset prefetcher" << endl;
+  best_offset = 0;
 }
 
 // called on every cache access
@@ -119,19 +109,22 @@ uint32_t CACHE::l2c_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache
   // Prefetch X + D if it is in the same page and MSHR is not full.
   // Run the round.
   // Check if any of two requirement are met 1> MAXSCORE 2> MAXROUND. If so then, Reset everything and update the best offset
-  if (MSHR.occupancy < (MSHR.SIZE>>1) && EXTRACT_PAGE_ID(addr) == EXTRACT_PAGE_ID(addr + best_offset)) {
-    prefetch_line(ip, addr, addr + best_offset, FILL_L2, 0);
-  } else if (EXTRACT_PAGE_ID(addr) == EXTRACT_PAGE_ID(addr + best_offset)) {
-    prefetch_line(ip, addr, addr + best_offset, FILL_LLC, 0);
-  }
+  // on cache miss and prefetch hit (TODO: how to know if it is a prefetch hit?)
+  if (cache_hit == 0) {
+    if (MSHR.occupancy < (MSHR.SIZE>>1) && EXTRACT_PAGE_ID(addr) == EXTRACT_PAGE_ID(addr + best_offset) && get_max_score() > BADSCORE) {
+      prefetch_line(ip, addr, addr + best_offset, FILL_L2, 0);
+    } else if (EXTRACT_PAGE_ID(addr) == EXTRACT_PAGE_ID(addr + best_offset) && get_max_score() > BADSCORE) {
+      prefetch_line(ip, addr, addr + best_offset, FILL_LLC, 0);
+    }
 
-  // run the round
-  run_round(addr);
+    // run the round
+    run_round(addr);
 
-  if (round_counter == ROUNDMAX || get_max_score() == SCOREMAX) {
-    // Phase is done. Reset everything and update best_offset
-    best_offset = get_best_offset();
-    reset_phase();
+    if (round_counter == ROUNDMAX || get_max_score() == SCOREMAX) {
+      // Phase is done. Reset everything and update best_offset
+      best_offset = get_best_offset();
+      reset_phase();
+    }
   }
   return metadata_in;
 }
