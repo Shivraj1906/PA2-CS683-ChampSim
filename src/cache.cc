@@ -1,5 +1,5 @@
+//  exclusive
 
-// non-inclusive
 
 
 
@@ -214,19 +214,21 @@ void CACHE::handle_fill()
                             cout << " victim_addr: " << block[set][way].tag << dec << endl; });
                 }
                 else {
-                    PACKET writeback_packet;
+                    if (MSHR.entry[mshr_index].fill_level == fill_level) {
+                        PACKET writeback_packet;
 
-                    writeback_packet.fill_level = fill_level << 1;
-                    writeback_packet.cpu = fill_cpu;
-                    writeback_packet.address = block[set][way].address;
-                    writeback_packet.full_addr = block[set][way].full_addr;
-                    writeback_packet.data = block[set][way].data;
-                    writeback_packet.instr_id = MSHR.entry[mshr_index].instr_id;
-                    writeback_packet.ip = 0; // writeback does not have ip
-                    writeback_packet.type = WRITEBACK;
-                    writeback_packet.event_cycle = current_core_cycle[fill_cpu];
+                        writeback_packet.fill_level = fill_level << 1;
+                        writeback_packet.cpu = fill_cpu;
+                        writeback_packet.address = block[set][way].address;
+                        writeback_packet.full_addr = block[set][way].full_addr;
+                        writeback_packet.data = block[set][way].data;
+                        writeback_packet.instr_id = MSHR.entry[mshr_index].instr_id;
+                        writeback_packet.ip = 0; // writeback does not have ip
+                        writeback_packet.type = WRITEBACK;
+                        writeback_packet.event_cycle = current_core_cycle[fill_cpu];
 
-                    lower_level->add_wq(&writeback_packet);
+                        lower_level->add_wq(&writeback_packet);
+                    }
                 }
             }
 #ifdef SANITY_CHECK
@@ -315,8 +317,17 @@ void CACHE::handle_fill()
 
 #ifdef PUSH_DTLB_PB
             if ( (cache_type!=IS_DTLB) || (cache_type==IS_DTLB && MSHR.entry[mshr_index].type != PREFETCH_TRANSLATION) )
-#endif	
                 fill_cache(set, way, &MSHR.entry[mshr_index]);
+#endif	
+            if (MSHR.entry[mshr_index].fill_level == fill_level) {
+                fill_cache(set, way, &MSHR.entry[mshr_index]);
+            }
+            
+            // invalidate block at a lower level
+            CACHE *lower_cache = dynamic_cast<CACHE *>(lower_level);
+            if (lower_cache) {
+                lower_cache->invalidate_entry(MSHR.entry[mshr_index].address);
+            }
 #ifdef PUSH_DTLB_PB
             else if (cache_type == IS_DTLB && MSHR.entry[mshr_index].type == PREFETCH_TRANSLATION)
             {
@@ -403,7 +414,6 @@ void CACHE::handle_fill()
             }
 
 #endif	
-
             // check fill level
             if (MSHR.entry[mshr_index].fill_level < fill_level) {
 
@@ -456,34 +466,36 @@ void CACHE::handle_fill()
             //@v if send_both_tlb == 1 in STLB, response should return to both ITLB and DTLB
 
 
-            // update processed packets
-            if ((cache_type == IS_ITLB) && (MSHR.entry[mshr_index].type != PREFETCH_TRANSLATION)) { //@v Responses to prefetch requests should not go to PROCESSED queue 
-                MSHR.entry[mshr_index].instruction_pa = block[set][way].data;
-                if (PROCESSED.occupancy < PROCESSED.SIZE)
-                    PROCESSED.add_queue(&MSHR.entry[mshr_index]);
-            }
-            else if ((cache_type == IS_DTLB) && (MSHR.entry[mshr_index].type != PREFETCH_TRANSLATION)) {
-                //@Vasudha: Perfect DTLB Prefetcher: commenting as in case of read miss, translation is already sent to PROCESSED QUEUE
-                MSHR.entry[mshr_index].data_pa = block[set][way].data;
-                if (PROCESSED.occupancy < PROCESSED.SIZE)
-                    PROCESSED.add_queue(&MSHR.entry[mshr_index]);
-            }
-            else if (cache_type == IS_L1I && (MSHR.entry[mshr_index].type != PREFETCH)) {
-                if (PROCESSED.occupancy < PROCESSED.SIZE)
-                    PROCESSED.add_queue(&MSHR.entry[mshr_index]);
-            }
-            else if ((cache_type == IS_L1D) && (MSHR.entry[mshr_index].type != PREFETCH)) {
-#ifndef PRACTICAL_PERFECT_L1D
-                if (PROCESSED.occupancy < PROCESSED.SIZE)	//Neelu: Commenting for ideal L1 prefetcher i.e. not sending to processed queue
-                    PROCESSED.add_queue(&MSHR.entry[mshr_index]);
-#endif
-            }
+                // update processed packets
+                if ((cache_type == IS_ITLB) && (MSHR.entry[mshr_index].type != PREFETCH_TRANSLATION)) { //@v Responses to prefetch requests should not go to PROCESSED queue 
+                    MSHR.entry[mshr_index].instruction_pa = block[set][way].data;
+                    if (PROCESSED.occupancy < PROCESSED.SIZE)
+                        PROCESSED.add_queue(&MSHR.entry[mshr_index]);
+                }
+                else if ((cache_type == IS_DTLB) && (MSHR.entry[mshr_index].type != PREFETCH_TRANSLATION)) {
+                    //@Vasudha: Perfect DTLB Prefetcher: commenting as in case of read miss, translation is already sent to PROCESSED QUEUE
+                    MSHR.entry[mshr_index].data_pa = block[set][way].data;
+                    if (PROCESSED.occupancy < PROCESSED.SIZE)
+                        PROCESSED.add_queue(&MSHR.entry[mshr_index]);
+                }
+                else if (cache_type == IS_L1I && (MSHR.entry[mshr_index].type != PREFETCH)) {
+                    if (PROCESSED.occupancy < PROCESSED.SIZE)
+                        PROCESSED.add_queue(&MSHR.entry[mshr_index]);
+                }
+                else if ((cache_type == IS_L1D) && (MSHR.entry[mshr_index].type != PREFETCH)) {
+    #ifndef PRACTICAL_PERFECT_L1D
+                    if (PROCESSED.occupancy < PROCESSED.SIZE)	//Neelu: Commenting for ideal L1 prefetcher i.e. not sending to processed queue
+                        PROCESSED.add_queue(&MSHR.entry[mshr_index]);
+    #endif
+                }
+
 
             if(warmup_complete[fill_cpu])
             {
                 uint64_t current_miss_latency = (current_core_cycle[fill_cpu] - MSHR.entry[mshr_index].cycle_enqueued);
                 total_miss_latency += current_miss_latency;
             }
+
 
             MSHR.remove_queue(&MSHR.entry[mshr_index]);
             MSHR.num_returned--;
@@ -550,6 +562,7 @@ if (writeback_cpu == NUM_CPUS)
             WQ.entry[index].data = block[set][way].data;
 
             // check fill level
+            assert(WQ.entry[index].fill_level >= fill_level);
             if (WQ.entry[index].fill_level < fill_level) {
                 if(fill_level == FILL_L2)
                 {
@@ -1174,7 +1187,33 @@ if((cache_type == IS_L1I || cache_type == IS_L1D) && reads_ready.size() == 0)
 
 
             if (way >= 0) { // read hit
+                // EXCLUSIVITY ASSERTS
+                // TLBs
+                if (cache_type == IS_DTLB || cache_type == IS_ITLB) {
+                    assert(ooo_cpu->STLB.check_hit(&RQ.entry[index]) < 0);
+                    assert(ooo_cpu->L2C.check_hit(&RQ.entry[index]) < 0);
+                    CACHE * lower_cache = dynamic_cast<CACHE *>(ooo_cpu->L2C.lower_level);
+                    if (lower_cache) {
+                        assert(lower_cache->check_hit(&RQ.entry[index] )< 0);
+                    }
+                }
 
+                // L1 cache
+                if (cache_type == IS_L1D || cache_type == IS_L1I) {
+                    assert(ooo_cpu->L2C.check_hit(&RQ.entry[index]) < 0);
+                    CACHE * lower_cache = dynamic_cast<CACHE *>(ooo_cpu->L2C.lower_level);
+                    if (lower_cache) {
+                        assert(lower_cache->check_hit(&RQ.entry[index] )< 0);
+                    }
+                }
+
+                // L2 cache
+                // if (cache_type == IS_L2C) {
+                //     CACHE * lower_cache = dynamic_cast<CACHE *>(ooo_cpu->L2C.lower_level);
+                //     if (lower_cache) {
+                //         assert(lower_cache->check_hit(&RQ.entry[index] )< 0);
+                //     }
+                // }
 
                 if (cache_type == IS_ITLB) {
 

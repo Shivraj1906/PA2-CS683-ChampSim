@@ -1,6 +1,6 @@
 #include "cache.h"
 #define TRACKED_OFFSET_COUNT 5
-#define TABLE_ENTRIES 1024
+#define TABLE_ENTRIES 128
 
 typedef struct offset_list {
   int64_t offset;

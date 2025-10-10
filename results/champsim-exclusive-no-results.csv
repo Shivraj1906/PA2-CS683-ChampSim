@@ -1,0 +1,5 @@
+Trace, IPC,Total Access,Total Hits,Total Misses,Total MPKI,Load Access,Load Hit,Load Miss,Load MPKI,Data Load MPKI,Prefetch Requested,Prefetch Issued,Prefetch Useful,Prefetch Useless,Useful Load Prefetches,Timely Prefetches,Late Prefetches,Dropped Prefetches,Average Miss Latency,Accuracy,L1 MPKI, LLC MPKI
+trace1.champsimtrace.xz,0.480208,3081146,619761,2461385,98.4554,250205,0,250205,10.0082,10.0082,0,0,0,0,0,0,0,0,242.167,-nan,66.0505,73.2114
+trace2.champsimtrace.xz,0.418361,3639612,736486,2903126,116.125,295557,0,295557,11.8223,11.8223,0,0,0,0,0,0,0,0,253.913,-nan,78.0224,86.3018
+trace3.champsimtrace.xz,0.775126,1667903,328513,1339390,53.5756,135439,0,135439,5.41756,5.41756,0,0,0,0,0,0,0,0,170.935,-nan,35.7547,39.8752
+trace4.champsimtrace.xz,0.420187,3625689,734080,2891609,115.664,294448,0,294448,11.7779,11.7779,0,0,0,0,0,0,0,0,252.499,-nan,77.7242,85.9409

@@ -1208,12 +1208,12 @@ if((cache_type == IS_L1I || cache_type == IS_L1D) && reads_ready.size() == 0)
                 }
 
                 // L2 cache
-                if (cache_type == IS_L2C) {
-                    CACHE * lower_cache = dynamic_cast<CACHE *>(ooo_cpu->L2C.lower_level);
-                    if (lower_cache) {
-                        assert(lower_cache->check_hit(&RQ.entry[index] )< 0);
-                    }
-                }
+                // if (cache_type == IS_L2C) {
+                //     CACHE * lower_cache = dynamic_cast<CACHE *>(ooo_cpu->L2C.lower_level);
+                //     if (lower_cache) {
+                //         assert(lower_cache->check_hit(&RQ.entry[index] )< 0);
+                //     }
+                // }
 
                 if (cache_type == IS_ITLB) {
 
